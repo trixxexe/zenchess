@@ -1,13 +1,13 @@
 /**
  * The chess.com-style game report, computed entirely from a ReviewResult:
  * opening name and book depth, accuracy per phase, best-move percentage, the
- * turning point, and whether (and until when) the player was winning.
+ * turning point, key moments to jump to, and a plain-English verdict.
  */
 
 import { Chess, type Color } from 'chess.js'
 
 import { findOpening, type OpeningInfo } from './openings'
-import type { MoveClass, ReviewResult } from './review'
+import { CLASS_ORDER, type MoveClass, type ReviewResult } from './review'
 
 export type Phase = 'opening' | 'middlegame' | 'endgame'
 
@@ -19,13 +19,22 @@ export const PHASE_LABEL: Record<Phase, string> = {
 
 const PHASE_ORDER: Phase[] = ['opening', 'middlegame', 'endgame']
 const VALUES: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 }
-const CLASS_ORDER: MoveClass[] = ['best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder']
 
 export type TurnPoint = {
   ply: number
   moveNumber: number
   san: string
   bestSan: string | null
+  cpLoss: number
+  color: Color
+}
+
+export type KeyMoment = {
+  ply: number
+  moveNumber: number
+  san: string
+  bestSan: string | null
+  classification: MoveClass
   cpLoss: number
   color: Color
 }
@@ -38,6 +47,10 @@ export type GameReport = {
   legend: { key: MoveClass; you: number; opponent: number }[]
   turnPoint: TurnPoint | null
   winningUntil: { ply: number; moveNumber: number } | null
+  headline: string
+  headlineDetail: string
+  keyMoments: KeyMoment[]
+  bookExit: { ply: number; moveNumber: number } | null
 }
 
 function materialTotal(fen: string): number {
@@ -71,13 +84,14 @@ export function buildReport(review: ReviewResult, player: Color): GameReport {
   const opponent: Color = player === 'w' ? 'b' : 'w'
   const opening = findOpening(review.moves.map((move) => move.san))
 
-  // Phase per move: the first ten moves are the opening, then the endgame
-  // begins once the heavy pieces are gone and never goes back.
+  // The opening lasts a little past the book, then the middlegame, and the
+  // endgame begins once the heavy pieces are gone and never goes back.
+  const openingPlies = Math.min(24, Math.max(8, (opening?.bookPlies ?? 10) + 4))
   let endgame = false
   const phases = review.moves.map((move, index) => {
     if (!endgame && materialTotal(move.fenBefore) <= 13) endgame = true
-    const phase: Phase = index < 20 ? 'opening' : endgame ? 'endgame' : 'middlegame'
-    return phase
+    if (endgame) return 'endgame' as Phase
+    return (index < openingPlies ? 'opening' : 'middlegame') as Phase
   })
 
   const sums: Record<Phase, { you: number; youCount: number; opponent: number; opponentCount: number }> = {
@@ -87,6 +101,7 @@ export function buildReport(review: ReviewResult, player: Color): GameReport {
   }
 
   review.moves.forEach((move, index) => {
+    if (move.classification === 'book') return
     const bucket = sums[phases[index]]
     if (move.color === player) {
       bucket.you += move.accuracy
@@ -101,9 +116,12 @@ export function buildReport(review: ReviewResult, player: Color): GameReport {
   const totalOpponent = review.moves.length - totalYou
   const countsYou = review.counts[player]
   const countsOpponent = review.counts[opponent]
+  const decisionsYou = Math.max(0, totalYou - countsYou.book)
+  const decisionsOpponent = Math.max(0, totalOpponent - countsOpponent.book)
 
   let turnPoint: TurnPoint | null = null
   for (const move of review.moves) {
+    if (move.classification === 'book') continue
     if (!turnPoint || move.cpLoss > turnPoint.cpLoss) {
       turnPoint = {
         ply: move.ply,
@@ -130,6 +148,41 @@ export function buildReport(review: ReviewResult, player: Color): GameReport {
     }
   }
 
+  // Your mistakes, biggest first: the list to click through after the review.
+  const keyMoments: KeyMoment[] = review.moves
+    .filter(
+      (move) =>
+        move.color === player && (move.classification === 'blunder' || move.classification === 'mistake'),
+    )
+    .sort((a, b) => b.cpLoss - a.cpLoss)
+    .slice(0, 4)
+    .map((move) => ({
+      ply: move.ply,
+      moveNumber: Math.ceil(move.ply / 2),
+      san: move.san,
+      bestSan: move.bestSan,
+      classification: move.classification,
+      cpLoss: move.cpLoss,
+      color: move.color,
+    }))
+
+  const diff = review.accuracy[player] - review.accuracy[opponent]
+  let headline: string
+  if (diff >= 8) headline = 'You outplayed your opponent'
+  else if (diff >= 3) headline = 'You were the sharper player'
+  else if (diff >= -3) headline = 'An evenly matched game'
+  else if (diff >= -8) headline = 'Your opponent was a little sharper'
+  else headline = 'Your opponent was more accurate'
+
+  const errors: string[] = []
+  if (countsYou.blunder) errors.push(`${countsYou.blunder} blunder${countsYou.blunder === 1 ? '' : 's'}`)
+  if (countsYou.mistake) errors.push(`${countsYou.mistake} mistake${countsYou.mistake === 1 ? '' : 's'}`)
+  if (countsYou.inaccuracy)
+    errors.push(`${countsYou.inaccuracy} ${countsYou.inaccuracy === 1 ? 'inaccuracy' : 'inaccuracies'}`)
+  const headlineDetail = errors.length
+    ? `Your errors: ${errors.join(' and ')}.`
+    : 'No mistakes or blunders — a clean game.'
+
   return {
     player,
     opening,
@@ -142,11 +195,19 @@ export function buildReport(review: ReviewResult, player: Color): GameReport {
       }
     }),
     bestPct: {
-      you: totalYou ? (countsYou.best / totalYou) * 100 : 0,
-      opponent: totalOpponent ? (countsOpponent.best / totalOpponent) * 100 : 0,
+      you: decisionsYou ? ((countsYou.best + countsYou.great) / decisionsYou) * 100 : 0,
+      opponent: decisionsOpponent
+        ? ((countsOpponent.best + countsOpponent.great) / decisionsOpponent) * 100
+        : 0,
     },
     legend: CLASS_ORDER.map((key) => ({ key, you: countsYou[key], opponent: countsOpponent[key] })),
     turnPoint,
     winningUntil,
+    headline,
+    headlineDetail,
+    keyMoments,
+    bookExit: opening?.leftBookAtPly
+      ? { ply: opening.leftBookAtPly, moveNumber: Math.ceil(opening.leftBookAtPly / 2) }
+      : null,
   }
 }

@@ -1,5 +1,15 @@
 import { Chess, type Color } from 'chess.js'
-import { ArrowLeft, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Loader2,
+  X,
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { AppBar } from '../components/AppBar'
@@ -10,9 +20,11 @@ import { getEngine } from '../lib/engine'
 import { buildReport, PHASE_LABEL } from '../lib/report'
 import {
   CLASS_COLOR,
+  CLASS_GLYPH,
   CLASS_LABEL,
   ReviewCancelled,
   accuracyGrade,
+  coachNote,
   formatEval,
   reviewGame,
   reviewSummaryText,
@@ -26,6 +38,7 @@ export function Review() {
   const [lastGame] = useState(readLastGame)
   const [pgn, setPgn] = useState(lastGame?.pgn ?? '')
   const [player, setPlayer] = useState<Color>(lastGame?.player ?? 'w')
+  const [orientation, setOrientation] = useState<Color>(lastGame?.player ?? 'w')
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [review, setReview] = useState<ReviewResult | null>(null)
@@ -33,6 +46,7 @@ export function Review() {
   const [error, setError] = useState('')
   const [engineState, setEngineState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [archive, setArchive] = useState(() => loadArchive())
+  const [showBest, setShowBest] = useState(true)
   const cancelled = useRef(false)
   const movesScrollRef = useRef<HTMLDivElement>(null)
 
@@ -80,6 +94,39 @@ export function Review() {
 
   const playedMove = review && ply > 0 ? review.moves[ply - 1] : null
   const report = useMemo(() => (review ? buildReport(review, player) : null), [review, player])
+  const note = useMemo(
+    () =>
+      playedMove && report
+        ? coachNote(playedMove, { isYou: playedMove.color === player, openingName: report.opening?.name })
+        : null,
+    [playedMove, player, report],
+  )
+  const archiveEntry = archive.find((entry) => entry.pgn.trim() === pgn.trim())
+
+  // Show the move that should have been played, not the opponent's reply.
+  const bestArrow = playedMove
+    ? playedMove.classification === 'best' ||
+      playedMove.classification === 'great' ||
+      playedMove.classification === 'book'
+      ? null
+      : playedMove.bestMove
+    : (review?.bestMoves[0] ?? null)
+
+  const markers = useMemo(() => {
+    if (!report) return []
+    const out = report.keyMoments.map((moment) => ({
+      ply: moment.ply,
+      color: CLASS_COLOR[moment.classification],
+    }))
+    const turn = report.turnPoint
+    if (turn && !out.some((marker) => marker.ply === turn.ply)) out.push({ ply: turn.ply, color: '#ffb547' })
+    return out
+  }, [report])
+
+  function choosePlayer(next: Color) {
+    setPlayer(next)
+    setOrientation(next)
+  }
 
   async function start() {
     if (!pgn.trim()) {
@@ -91,6 +138,7 @@ export function Review() {
     setError('')
     setReview(null)
     setProgress({ done: 0, total: 0 })
+    setOrientation(player)
     try {
       const result = await reviewGame(pgn, {
         depth: 12,
@@ -122,6 +170,7 @@ export function Review() {
   function pickRecent(entry: (typeof archive)[number]) {
     setPgn(entry.pgn)
     setPlayer(entry.player)
+    setOrientation(entry.player)
     setError('')
   }
 
@@ -140,10 +189,22 @@ export function Review() {
               a chess.com review, computed on your own device.
             </p>
 
-            <div className="depth relative mt-6 rounded-card bg-surface p-4 shadow-glow">
-              <label htmlFor="pgn" className="text-[12px] text-faint">
-                Paste a PGN
-              </label>
+            <div className="mt-4 grid gap-2 text-[12px] leading-relaxed text-muted sm:grid-cols-3">
+              <p className="rounded-[9px] bg-white/[0.03] px-2.5 py-2">Every move graded, with the better move when there was one.</p>
+              <p className="rounded-[9px] bg-white/[0.03] px-2.5 py-2">Book moves marked, so opening theory is not scored as a mistake.</p>
+              <p className="rounded-[9px] bg-white/[0.03] px-2.5 py-2">Key moments you can jump straight to.</p>
+            </div>
+
+            <div className="depth relative mt-4 rounded-card bg-surface p-4 shadow-glow">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label htmlFor="pgn" className="text-[12px] text-faint">
+                  Paste a PGN
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-faint">You played</span>
+                  <PlayerToggle player={player} onChange={choosePlayer} />
+                </div>
+              </div>
               <textarea
                 id="pgn"
                 value={pgn}
@@ -227,30 +288,58 @@ export function Review() {
         )}
 
         {phase === 'done' && review && position && report && (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_400px] lg:items-start">
             <div className="mx-auto w-full max-w-[600px]">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] font-medium text-accent">Game review</p>
+                  {archiveEntry && (
+                    <span className="inline-flex items-center gap-1 rounded-[6px] bg-white/[0.05] px-1.5 py-0.5 text-[10px] text-muted">
+                      <span
+                        className={cx(
+                          'round size-1.5',
+                          archiveEntry.result === 'win'
+                            ? 'bg-[#8fd694]'
+                            : archiveEntry.result === 'loss'
+                              ? 'bg-accent-3'
+                              : 'bg-faint',
+                        )}
+                      />
+                      {archiveEntry.result === 'win' ? 'Win' : archiveEntry.result === 'loss' ? 'Loss' : 'Draw'} · level{' '}
+                      {archiveEntry.level}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="inline-flex items-center gap-1 text-[11px] text-faint transition-colors hover:text-fg"
+                >
+                  <ArrowLeft className="size-3" /> New review
+                </button>
+              </div>
+
               <ChessBoard
                 board={position.board}
                 turn={position.turn}
                 moves={position.legal}
+                orientation={orientation}
                 lastMove={playedMove ? { from: playedMove.from, to: playedMove.to } : null}
                 inCheck={position.inCheck}
-                arrow={ply < review.bestMoves.length ? review.bestMoves[ply] : null}
+                arrow={showBest ? bestArrow : null}
                 className="mx-auto"
               />
 
               <div className="mt-2 flex items-baseline justify-between gap-3 px-0.5">
-                <p className="truncate text-[11px] text-faint">
-                  {report.opening?.name ?? 'Opening not recognised'}
-                </p>
-                {report.opening?.leftBookAtPly && (
+                <p className="truncate text-[11px] text-faint">{report.opening?.name ?? 'Opening not recognised'}</p>
+                {report.bookExit && (
                   <span className="shrink-0 text-[11px] text-faint">
-                    Left the book on move {Math.ceil(report.opening.leftBookAtPly / 2)}
+                    Left the book on move {report.bookExit.moveNumber}
                   </span>
                 )}
               </div>
 
-              <div className="mt-3 flex items-center justify-between gap-2">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1">
                   <StepButton label="Start" onClick={() => setPly(0)} disabled={ply === 0}>
                     <ChevronsLeft className="size-4" />
@@ -270,34 +359,54 @@ export function Review() {
                   </StepButton>
                 </div>
 
-                {playedMove ? (
-                  <span
-                    className="inline-flex items-center gap-2 rounded-[9px] px-2.5 py-1 text-[12px]"
-                    style={{ background: `${CLASS_COLOR[playedMove.classification]}22`, color: CLASS_COLOR[playedMove.classification] }}
+                <div className="flex items-center gap-1.5">
+                  {playedMove ? (
+                    <span
+                      className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2 text-[12px]"
+                      style={{
+                        background: `${CLASS_COLOR[playedMove.classification]}22`,
+                        color: CLASS_COLOR[playedMove.classification],
+                      }}
+                    >
+                      <MoveBadge moveClass={playedMove.classification} size="sm" />
+                      {CLASS_LABEL[playedMove.classification]} · {playedMove.san}
+                      {playedMove.cpLoss >= 25 && (
+                        <span className="text-faint">
+                          {playedMove.cpLoss >= 5000 ? 'mate' : `−${(playedMove.cpLoss / 100).toFixed(2)}`}
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="inline-flex h-8 items-center text-[12px] text-faint">Start position</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setOrientation((value) => (value === 'w' ? 'b' : 'w'))}
+                    title="Flip board"
+                    aria-label="Flip board"
+                    className="grid size-9 place-items-center rounded-[10px] bg-white/[0.05] text-muted transition-colors hover:text-fg"
                   >
-                    <span className="round size-1.5" style={{ background: CLASS_COLOR[playedMove.classification] }} />
-                    {CLASS_LABEL[playedMove.classification]} · {playedMove.san}
-                    {playedMove.cpLoss >= 25 && (
-                      <span className="text-faint">−{(playedMove.cpLoss / 100).toFixed(2)}</span>
-                    )}
-                  </span>
-                ) : (
-                  <span className="text-[12px] text-faint">Start position</span>
-                )}
+                    <ArrowLeftRight className="size-4" />
+                  </button>
+                </div>
               </div>
+
+              <CoachPanel move={playedMove} note={note} showBest={showBest} onToggleBest={() => setShowBest((value) => !value)} />
             </div>
 
             <aside className="flex flex-col gap-3">
               <section className="grid grid-cols-2 gap-2">
-                <AccuracyCard title="White" value={review.accuracy.w} counts={review.counts.w} />
-                <AccuracyCard title="Black" value={review.accuracy.b} counts={review.counts.b} />
+                <AccuracyCard title="White" value={review.accuracy.w} counts={review.counts.w} you={player === 'w'} />
+                <AccuracyCard title="Black" value={review.accuracy.b} counts={review.counts.b} you={player === 'b'} />
               </section>
 
               <section className="depth relative rounded-card bg-surface p-3 shadow-glow">
-                <div className="flex items-baseline justify-between px-1">
+                <div className="flex items-center justify-between gap-2 px-1">
                   <h2 className="text-[12px] font-semibold">Game report</h2>
-                  <span className="text-[11px] text-faint">You are {player === 'w' ? 'White' : 'Black'}</span>
+                  <PlayerToggle player={player} onChange={choosePlayer} />
                 </div>
+                <p className="mt-1 px-1 text-[13px] font-medium text-fg/90">{report.headline}</p>
+                <p className="mt-0.5 px-1 text-[11px] text-faint">{report.headlineDetail}</p>
 
                 <div className="mt-2 grid grid-cols-[1fr_auto_auto] items-center gap-x-3 px-1 text-[10px] uppercase tracking-wide text-faint">
                   <span>Phase</span>
@@ -320,9 +429,35 @@ export function Review() {
                 <div className="mt-2 flex items-center justify-between rounded-[8px] bg-white/[0.04] px-2 py-1.5 text-[11px]">
                   <span className="text-muted">Best move played</span>
                   <span className="tabular-nums">
-                    {report.bestPct.you.toFixed(0)}% · <span className="text-muted">{report.bestPct.opponent.toFixed(0)}%</span>
+                    {report.bestPct.you.toFixed(0)}% ·{' '}
+                    <span className="text-muted">{report.bestPct.opponent.toFixed(0)}%</span>
                   </span>
                 </div>
+
+                {report.keyMoments.length > 0 && (
+                  <div className="mt-3 px-1">
+                    <p className="text-[10px] uppercase tracking-wide text-faint">Key moments</p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {report.keyMoments.map((moment) => (
+                        <button
+                          key={moment.ply}
+                          type="button"
+                          onClick={() => setPly(moment.ply)}
+                          title={`${CLASS_LABEL[moment.classification]}${moment.bestSan ? ` — best was ${moment.bestSan}` : ''}`}
+                          className="inline-flex items-center gap-1 rounded-[7px] px-1.5 py-1 text-[10px] tabular-nums transition-[filter] hover:brightness-110"
+                          style={{
+                            background: `${CLASS_COLOR[moment.classification]}1a`,
+                            color: CLASS_COLOR[moment.classification],
+                          }}
+                        >
+                          <span className="round size-1" style={{ background: CLASS_COLOR[moment.classification] }} />
+                          {moment.moveNumber}
+                          {moment.color === 'b' ? '…' : '.'} {moment.san}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {report.turnPoint && (
                   <div className="mt-2 rounded-[10px] bg-accent/[0.08] px-2.5 py-2">
@@ -365,23 +500,16 @@ export function Review() {
                 <div className="flex items-center justify-between px-1">
                   <h2 className="text-[12px] font-semibold">Evaluation</h2>
                   <span className="text-[11px] tabular-nums text-muted">
-                    {formatEval(review.graph[Math.min(ply, review.graph.length - 1)] ?? 0)}
+                    {formatEval(ply === 0 ? (review.graph[0] ?? 0) : (review.moves[ply - 1]?.evalAfter ?? 0))}
                   </span>
                 </div>
-                <EvalGraph
-                  graph={review.graph}
-                  ply={ply}
-                  markerPly={report.turnPoint?.ply}
-                  onSelect={setPly}
-                />
+                <EvalGraph graph={review.graph} ply={ply} markers={markers} onSelect={setPly} />
               </section>
 
               <section className="depth relative flex min-h-[160px] flex-col rounded-card bg-surface p-3 shadow-glow">
                 <div className="flex items-center justify-between px-1">
                   <h2 className="text-[12px] font-semibold">Moves</h2>
-                  <button type="button" onClick={reset} className="inline-flex items-center gap-1 text-[11px] text-faint hover:text-fg">
-                    <ArrowLeft className="size-3" /> New review
-                  </button>
+                  <span className="text-[10px] text-faint">← → to step</span>
                 </div>
                 <div ref={movesScrollRef} className="mt-2 max-h-[300px] overflow-y-auto text-[12.5px] tabular-nums">
                   {Array.from({ length: Math.ceil(review.moves.length / 2) }, (_, row) => {
@@ -399,14 +527,112 @@ export function Review() {
               </section>
 
               <p className="px-1 text-[11px] leading-relaxed text-faint">
-                {reviewSummaryText(review)} Accuracy measures how much winning chance each move kept, not how many
-                good moves you found.
+                {reviewSummaryText(review)} Accuracy measures how much winning chance each move kept, not how many good
+                moves you found.
               </p>
             </aside>
           </div>
         )}
       </Container>
     </div>
+  )
+}
+
+function MoveBadge({ moveClass, size = 'sm' }: { moveClass: MoveClass; size?: 'sm' | 'md' | 'lg' }) {
+  const box = size === 'lg' ? 'size-7 rounded-[7px] text-[13px]' : size === 'md' ? 'size-5 rounded-[5px] text-[10px]' : 'size-[15px] rounded-[4px] text-[8px]'
+  return (
+    <span
+      aria-hidden
+      className={cx('grid shrink-0 place-items-center font-bold leading-none', box)}
+      style={{ background: `${CLASS_COLOR[moveClass]}26`, color: CLASS_COLOR[moveClass] }}
+    >
+      {moveClass === 'book' ? <BookOpen className={size === 'lg' ? 'size-4' : 'size-2.5'} strokeWidth={2.5} /> : CLASS_GLYPH[moveClass]}
+    </span>
+  )
+}
+
+function PlayerToggle({ player, onChange }: { player: Color; onChange: (color: Color) => void }) {
+  return (
+    <div className="inline-flex shrink-0 rounded-[8px] bg-white/[0.05] p-0.5" role="group" aria-label="The side you played">
+      {(['w', 'b'] as Color[]).map((color) => (
+        <button
+          key={color}
+          type="button"
+          aria-pressed={player === color}
+          onClick={() => onChange(color)}
+          className={cx(
+            'rounded-[6px] px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+            player === color ? 'bg-white/[0.14] text-fg' : 'text-muted hover:text-fg',
+          )}
+        >
+          {color === 'w' ? 'White' : 'Black'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CoachPanel({
+  move,
+  note,
+  showBest,
+  onToggleBest,
+}: {
+  move: ReviewResult['moves'][number] | null
+  note: ReturnType<typeof coachNote> | null
+  showBest: boolean
+  onToggleBest: () => void
+}) {
+  if (!move || !note) {
+    return (
+      <section className="depth relative mt-3 rounded-card bg-surface p-3 shadow-glow">
+        <h2 className="text-[12px] font-semibold">Coach</h2>
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">
+          Step through the moves with the arrows or the move list. Every move is graded, and when there was a better
+          move the board shows it.
+        </p>
+      </section>
+    )
+  }
+
+  const color = CLASS_COLOR[move.classification]
+  const canShowBest =
+    Boolean(note.bestSan) &&
+    move.classification !== 'best' &&
+    move.classification !== 'great' &&
+    move.classification !== 'book'
+
+  return (
+    <section className="depth relative mt-3 rounded-card bg-surface p-3 shadow-glow">
+      <div className="flex items-start gap-2.5">
+        <MoveBadge moveClass={move.classification} size="lg" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h2 className="text-[13px] font-semibold" style={{ color }}>
+              {CLASS_LABEL[move.classification]}
+            </h2>
+            <span className="text-[12px] text-muted">{move.san}</span>
+            <span className="text-[11px] tabular-nums text-faint">
+              Eval {formatEval(move.evalBefore)} → {formatEval(move.evalAfter)}
+            </span>
+          </div>
+          <p className="mt-1 text-[12px] leading-relaxed text-fg/85">{note.detail}</p>
+
+          {canShowBest && (
+            <button
+              type="button"
+              onClick={onToggleBest}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-[7px] bg-white/[0.05] px-2 py-1 text-[11px] text-muted transition-colors hover:text-fg"
+            >
+              <span className="round size-1.5 bg-[#15781b]" />
+              Best: <span className="font-medium text-fg/90">{note.bestSan}</span>
+              {note.bestEval && <span className="text-faint">({note.bestEval})</span>}
+              <span className="text-faint">{showBest ? 'Hide arrow' : 'Show arrow'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -420,17 +646,19 @@ function ReviewMove({
   onSelect: (ply: number) => void
 }) {
   if (!move) return <span className="min-w-0 flex-1" />
+  const loss = move.cpLoss >= 25 ? ` — ${(move.cpLoss / 100).toFixed(1)} pawns lost` : ''
   return (
     <button
       type="button"
       data-active={active}
       onClick={() => onSelect(move.ply)}
+      title={`${CLASS_LABEL[move.classification]}${loss}`}
       className={cx(
         'flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-[5px] px-1.5 py-[3px] text-left transition-colors',
         active ? 'bg-white/[0.12] font-medium text-fg' : 'text-fg/75 hover:bg-white/[0.05]',
       )}
     >
-      <span className="round size-1.5 shrink-0" style={{ background: CLASS_COLOR[move.classification] }} />
+      <MoveBadge moveClass={move.classification} />
       <span className="truncate">{move.san}</span>
     </button>
   )
@@ -465,15 +693,25 @@ function AccuracyCard({
   title,
   value,
   counts,
+  you,
 }: {
   title: string
   value: number
   counts: Record<MoveClass, number>
+  you: boolean
 }) {
   return (
-    <div className="depth relative rounded-card bg-surface p-3 shadow-glow">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[11px] font-medium text-muted">{title}</span>
+    <div
+      className={cx(
+        'depth relative rounded-card bg-surface p-3 shadow-glow',
+        you && 'ring-1 ring-accent/35',
+      )}
+    >
+      <div className="flex items-baseline justify-between gap-1">
+        <span className="inline-flex items-baseline gap-1 text-[11px] font-medium text-muted">
+          {title}
+          {you && <span className="text-[9px] uppercase tracking-wide text-accent">You</span>}
+        </span>
         <span className="text-[10px] text-faint">{accuracyGrade(value)}</span>
       </div>
       <p className="mt-1 text-[26px] font-semibold leading-none tracking-[-0.03em] tabular-nums">
@@ -500,27 +738,31 @@ function AccuracyCard({
 function EvalGraph({
   graph,
   ply,
-  markerPly,
+  markers,
   onSelect,
 }: {
   graph: number[]
   ply: number
-  markerPly?: number
+  markers: { ply: number; color: string }[]
   onSelect: (ply: number) => void
 }) {
   const width = 320
-  const height = 72
+  const height = 92
+  const plot = 76
+  const mid = plot / 2
   const clamp = (value: number) => Math.max(-1200, Math.min(1200, value))
   const step = graph.length > 1 ? width / (graph.length - 1) : width
-  const toY = (cp: number) => height / 2 - (clamp(cp) / 1200) * (height / 2 - 4)
+  const toY = (cp: number) => mid - (clamp(cp) / 1200) * (mid - 4)
   const line = graph.map((cp, index) => `${index === 0 ? 'M' : 'L'}${(index * step).toFixed(1)},${toY(cp).toFixed(1)}`).join(' ')
-  const area = `${line} L${width},${height / 2} L0,${height / 2} Z`
+  const area = `${line} L${width},${mid} L0,${mid} Z`
 
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
-      className="mt-1 h-[72px] w-full cursor-crosshair"
+      className="mt-1 h-[92px] w-full cursor-crosshair"
       preserveAspectRatio="none"
+      role="img"
+      aria-label="Evaluation graph. Click to jump to a position."
       onClick={(event) => {
         const rect = event.currentTarget.getBoundingClientRect()
         const ratio = (event.clientX - rect.left) / rect.width
@@ -528,19 +770,36 @@ function EvalGraph({
       }}
     >
       <defs>
-        <linearGradient id="review-eval" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#fdf6ec" stopOpacity="0.35" />
-          <stop offset="1" stopColor="#fdf6ec" stopOpacity="0" />
-        </linearGradient>
+        <clipPath id="review-eval-above">
+          <rect x="0" y="0" width={width} height={mid} />
+        </clipPath>
+        <clipPath id="review-eval-below">
+          <rect x="0" y={mid} width={width} height={plot - mid} />
+        </clipPath>
       </defs>
-      <line x1="0" x2={width} y1={height / 2} y2={height / 2} stroke="rgba(255,236,224,0.18)" strokeDasharray="3 4" />
-      <path d={area} fill="url(#review-eval)" />
+      <line x1="0" x2={width} y1={mid} y2={mid} stroke="rgba(255,236,224,0.18)" strokeDasharray="3 4" />
+      <path d={area} fill="rgba(253,246,236,0.16)" clipPath="url(#review-eval-above)" />
+      <path d={area} fill="rgba(255,122,69,0.16)" clipPath="url(#review-eval-below)" />
       <path d={line} fill="none" stroke="#fdf6ec" strokeWidth="1.6" strokeLinejoin="round" />
-      {typeof markerPly === 'number' && markerPly > 0 && (
-        <circle cx={markerPly * step} cy={toY(graph[markerPly] ?? 0)} r="2.2" fill="#ffb547" />
-      )}
-      <line x1={ply * step} x2={ply * step} y1="0" y2={height} stroke="#ff7a45" strokeWidth="1.5" />
+      {markers.map((marker) => (
+        <circle
+          key={`${marker.ply}-${marker.color}`}
+          cx={marker.ply * step}
+          cy={toY(graph[marker.ply] ?? 0)}
+          r="2.4"
+          fill={marker.color}
+          stroke="#0e0b09"
+          strokeWidth="0.8"
+        />
+      ))}
+      <line x1={ply * step} x2={ply * step} y1="0" y2={plot} stroke="#ff7a45" strokeWidth="1.5" />
       <circle cx={ply * step} cy={toY(graph[ply] ?? 0)} r="2.6" fill="#ff7a45" />
+      <text x="0" y={height - 2} fontSize="7" fill="rgba(253,246,236,0.35)">
+        1
+      </text>
+      <text x={width} y={height - 2} textAnchor="end" fontSize="7" fill="rgba(253,246,236,0.35)">
+        {Math.ceil((graph.length - 1) / 2)}
+      </text>
     </svg>
   )
 }
