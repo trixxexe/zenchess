@@ -1,0 +1,8 @@
+Chess piece set: "Cburnett" by Colin M.L. Burnett
+https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces
+
+Licensed under the Creative Commons Attribution-Share Alike 3.0 Unported license.
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Files in this folder are unmodified copies of the set distributed with lichess
+(https://github.com/lichess-org/lila/tree/master/public/piece/cburnett).
